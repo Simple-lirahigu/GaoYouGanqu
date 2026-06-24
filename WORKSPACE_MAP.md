@@ -4,6 +4,7 @@
 
 - `scripts/gaoyou_irrigation_2020.js`：高邮灌区 2020 年灌溉稻田初步识别 GEE JavaScript。
 - `scripts/gaoyou_landcover_rf_2020.js`：高邮地区 2020 年 S1/S2 多时相随机森林土地利用分类、空间验证和耕地面积统计。
+- `scripts/gaoyou_landcover_hierarchical_rf_2020.js`：增强版分层随机森林；先识别永久水体，再分类林地、耕地、建筑和其他，重点降低耕地误判水体。
 
 ## 数据资产
 
@@ -24,3 +25,10 @@
 - 耕地影像：`gaoyou_cropland_rf_2020_10m.tif`
 - 分类置信度：`gaoyou_landcover_rf_confidence_2020_10m.tif`
 - 面积、精度、变量重要性 CSV 和训练/调参/测试样本 SHP
+
+## 增强版分层随机森林默认输出
+
+- Google Drive 文件夹：`GEE_Gaoyou_Hierarchical_RF`
+- 五类分层分类、耕地、永久水体概率和置信度 GeoTIFF
+- 独立测试精度、面积和两阶段变量重要性 CSV
+- 独立测试样本 GeoJSON
