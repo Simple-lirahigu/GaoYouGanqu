@@ -1,0 +1,9 @@
+# Local debugging output
+result_error.txt
+.git_empty_backup/
+
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
