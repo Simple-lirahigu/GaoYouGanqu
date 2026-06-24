@@ -666,6 +666,137 @@ var bestWaterThreshold = ee.Number(bestWater.get('threshold'));
 var finalWaterMask = finalWaterProbability.gte(bestWaterThreshold);
 
 // ============================================================================
+// 7.1 水体样本人工质检数据
+// ============================================================================
+
+// 仅导出人工判断水体真伪所需的核心字段，避免把全部月尺度特征写入文件。
+var waterQaImage = finalWaterProbability
+  .addBands(jrc)
+  .addBands(dynamicWorld)
+  .addBands(waterMonthCount)
+  .addBands(vegetationMonthCount)
+  .addBands(s2AnnualStats.select([
+    'NDVI_mean', 'NDVI_max', 'NDVI_stdDev',
+    'MNDWI_mean', 'MNDWI_max', 'MNDWI_stdDev'
+  ]))
+  .addBands(s1AnnualStats.select([
+    'VV_mean', 'VV_min', 'VV_max', 'VV_stdDev',
+    'VH_mean', 'VH_min', 'VH_max', 'VH_stdDev'
+  ]));
+
+var waterQaProperties = [
+  'sample_split',
+  'grid_id',
+  'model_label',
+  'water_label'
+];
+
+function prepareWaterQaSamples(points, sourceName) {
+  var sampled = waterQaImage.sampleRegions({
+    collection: points,
+    properties: waterQaProperties,
+    scale: SCALE,
+    projection: sampleProjection,
+    tileScale: 4,
+    geometries: true
+  });
+
+  return sampled.map(function(feature) {
+    var coordinates = feature.geometry().coordinates();
+    var jrcOccurrence = ee.Number(feature.get('JRC_occurrence'));
+    var dwWater = ee.Number(feature.get('DW_water'));
+    var waterMonths = ee.Number(feature.get('S2_water_month_count'));
+    var vegetationMonths = ee.Number(feature.get('S2_vegetation_month_count'));
+    var waterProbability = ee.Number(feature.get('water_probability'));
+
+    // 仅作人工检查提示：历史水体、年度模型和月度持续性证据均较弱，
+    // 或植被月份较多时，优先核查。不能据此自动删除样本。
+    var weakWaterEvidence = jrcOccurrence.lt(25)
+      .and(dwWater.lt(0.40))
+      .and(waterMonths.lte(2));
+    var cropLikeEvidence = vegetationMonths.gte(3)
+      .and(waterProbability.lt(0.75));
+    var qaSuspect = weakWaterEvidence.or(cropLikeEvidence);
+
+    return feature.set({
+      qa_source: sourceName,
+      longitude: coordinates.get(0),
+      latitude: coordinates.get(1),
+      original_class_code: 1,
+      class_name: '水体',
+      selected_water_threshold: bestWaterThreshold,
+      qa_suspect: ee.Number(ee.Algorithms.If(qaSuspect, 1, 0)),
+      qa_reason: ee.String(ee.Algorithms.If(
+        weakWaterEvidence,
+        'weak_persistent_water_evidence',
+        ee.Algorithms.If(
+          cropLikeEvidence,
+          'seasonal_vegetation_or_cropland_signal',
+          'no_automatic_warning'
+        )
+      ))
+    });
+  });
+}
+
+var waterTrainQa = prepareWaterQaSamples(
+  waterTrain.filter(ee.Filter.eq('water_label', 1)),
+  'water_training'
+);
+var waterTuneQa = prepareWaterQaSamples(
+  waterTune.filter(ee.Filter.eq('water_label', 1)),
+  'water_tuning'
+);
+var waterTestQa = prepareWaterQaSamples(
+  rawTestPoints
+    .filter(ee.Filter.eq('model_label', WATER_MODEL_CODE))
+    .map(function(feature) {
+      return feature
+        .set('water_label', 1)
+        .set('sample_split', 'independent_test_water');
+    }),
+  'water_independent_test'
+);
+var allWaterQaSamples = waterTrainQa
+  .merge(waterTuneQa)
+  .merge(waterTestQa);
+
+print('人工质检水体训练点数量：', waterTrainQa.size());
+print('人工质检水体调参点数量：', waterTuneQa.size());
+print('人工质检独立测试水体点数量：', waterTestQa.size());
+print(
+  '自动提示需优先核查的水体点数量：',
+  allWaterQaSamples.filter(ee.Filter.eq('qa_suspect', 1)).size()
+);
+
+Map.addLayer(
+  waterTrainQa.style({color: '00FFFF', pointSize: 4}),
+  {},
+  '人工质检-水体训练点',
+  false
+);
+Map.addLayer(
+  waterTuneQa.style({color: '0055FF', pointSize: 4}),
+  {},
+  '人工质检-水体调参点',
+  false
+);
+Map.addLayer(
+  waterTestQa.style({color: 'FF00FF', pointSize: 4}),
+  {},
+  '人工质检-独立测试水体点',
+  false
+);
+Map.addLayer(
+  allWaterQaSamples
+    .filter(ee.Filter.eq('qa_suspect', 1))
+    .style({color: 'FF0000', pointSize: 6}),
+  {},
+  '人工质检-优先核查水体点',
+  true
+);
+
+// ============================================================================
 // 8. 第二层：非水体四分类调参
 // ============================================================================
 
@@ -1062,3 +1193,34 @@ Export.table.toDrive({
   fileFormat: 'GeoJSON'
 });
 
+Export.table.toDrive({
+  collection: waterTrainQa,
+  description: 'Gaoyou_water_training_samples_QA_2020',
+  folder: DRIVE_FOLDER,
+  fileNamePrefix: 'gaoyou_water_training_samples_qa_2020',
+  fileFormat: 'GeoJSON'
+});
+
+Export.table.toDrive({
+  collection: waterTuneQa,
+  description: 'Gaoyou_water_tuning_samples_QA_2020',
+  folder: DRIVE_FOLDER,
+  fileNamePrefix: 'gaoyou_water_tuning_samples_qa_2020',
+  fileFormat: 'GeoJSON'
+});
+
+Export.table.toDrive({
+  collection: waterTestQa,
+  description: 'Gaoyou_water_independent_test_samples_QA_2020',
+  folder: DRIVE_FOLDER,
+  fileNamePrefix: 'gaoyou_water_independent_test_samples_qa_2020',
+  fileFormat: 'GeoJSON'
+});
+
+Export.table.toDrive({
+  collection: allWaterQaSamples,
+  description: 'Gaoyou_all_water_samples_QA_2020',
+  folder: DRIVE_FOLDER,
+  fileNamePrefix: 'gaoyou_all_water_samples_qa_2020',
+  fileFormat: 'CSV'
+});
