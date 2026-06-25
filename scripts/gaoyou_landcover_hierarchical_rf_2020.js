@@ -664,6 +664,11 @@ var finalWaterProbability = probabilityOfClassOne(
 );
 var bestWaterThreshold = ee.Number(bestWater.get('threshold'));
 var finalWaterMask = finalWaterProbability.gte(bestWaterThreshold);
+// 最终二值水体预测：1=水体，0=非水体。
+var finalWaterPrediction = finalWaterMask
+  .unmask(0)
+  .rename('water_prediction')
+  .toByte();
 
 // ============================================================================
 // 7.1 水体样本人工质检数据
@@ -691,7 +696,7 @@ var waterQaProperties = [
   'water_label'
 ];
 
-function prepareWaterQaSamples(points, sourceName) {
+function prepareWaterQaSamples(points, sourceName, sampleType) {
   var sampled = waterQaImage.sampleRegions({
     collection: points,
     properties: waterQaProperties,
@@ -720,6 +725,9 @@ function prepareWaterQaSamples(points, sourceName) {
 
     return feature.set({
       qa_source: sourceName,
+      // 1=训练点，2=调参点，3=独立测试点。
+      sample_type: sampleType,
+      sample_type_name: sourceName,
       longitude: coordinates.get(0),
       latitude: coordinates.get(1),
       original_class_code: 1,
@@ -741,11 +749,13 @@ function prepareWaterQaSamples(points, sourceName) {
 
 var waterTrainQa = prepareWaterQaSamples(
   waterTrain.filter(ee.Filter.eq('water_label', 1)),
-  'water_training'
+  'water_training',
+  1
 );
 var waterTuneQa = prepareWaterQaSamples(
   waterTune.filter(ee.Filter.eq('water_label', 1)),
-  'water_tuning'
+  'water_tuning',
+  2
 );
 var waterTestQa = prepareWaterQaSamples(
   rawTestPoints
@@ -755,7 +765,8 @@ var waterTestQa = prepareWaterQaSamples(
         .set('water_label', 1)
         .set('sample_split', 'independent_test_water');
     }),
-  'water_independent_test'
+  'water_independent_test',
+  3
 );
 var allWaterQaSamples = waterTrainQa
   .merge(waterTuneQa)
@@ -964,6 +975,12 @@ Map.addLayer(
   false
 );
 Map.addLayer(
+  finalWaterPrediction.selfMask(),
+  {min: 1, max: 1, palette: ['0066FF']},
+  '最终二值水体预测',
+  false
+);
+Map.addLayer(
   cropland.selfMask(),
   {palette: ['FFD700']},
   '增强版耕地',
@@ -1149,6 +1166,19 @@ Export.image.toDrive({
 });
 
 Export.image.toDrive({
+  image: finalWaterPrediction.clip(region),
+  description: 'Gaoyou_permanent_water_prediction_2020',
+  folder: DRIVE_FOLDER,
+  fileNamePrefix: 'gaoyou_permanent_water_prediction_2020_10m',
+  region: region,
+  scale: SCALE,
+  crs: EXPORT_CRS,
+  maxPixels: 1e13,
+  fileFormat: 'GeoTIFF',
+  formatOptions: {cloudOptimized: true}
+});
+
+Export.image.toDrive({
   image: confidence.clip(region),
   description: 'Gaoyou_hierarchical_RF_confidence_2020',
   folder: DRIVE_FOLDER,
@@ -1223,4 +1253,12 @@ Export.table.toDrive({
   folder: DRIVE_FOLDER,
   fileNamePrefix: 'gaoyou_all_water_samples_qa_2020',
   fileFormat: 'CSV'
+});
+
+Export.table.toDrive({
+  collection: allWaterQaSamples,
+  description: 'Gaoyou_all_water_sample_points_2020',
+  folder: DRIVE_FOLDER,
+  fileNamePrefix: 'gaoyou_all_water_sample_points_2020',
+  fileFormat: 'GeoJSON'
 });
