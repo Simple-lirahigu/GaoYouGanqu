@@ -2,6 +2,11 @@
 result_error.txt
 .git_empty_backup/
 
+# Local reviewed samples and generated intermediate data
+waterSample_shp/
+intermediate/
+outputs/
+
 # Operating system and editor files
 .DS_Store
 Thumbs.db

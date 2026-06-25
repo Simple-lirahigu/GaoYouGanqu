@@ -40,5 +40,7 @@
 - 水体训练、调参、独立测试人工质检点 SHP，以及合并质检表 CSV
 - 合并水体样本点 SHP：`samp_type=1/2/3` 分别表示训练、调参和独立测试点
 - SHP内含人工核查字段：`man_label`、`qa_stat`、`qa_note`、`reviewer`、`rev_date`
+- 人工修正水体样本需上传为GEE资产：`projects/ee-yangsimple237/assets/gaoyou_water_samples_reviewed_2020`
+- 人工水体独立测试预测及二分类精度导出：`gaoyou_reviewed_water_test_predictions_2020.csv`
 - 水体样本类型 GeoTIFF：`0=无样本，1=训练点，2=调参点，3=独立测试点`
 - 二值水体预测 GeoTIFF：`1=水体，0=非水体`；同时保留水体概率 GeoTIFF
