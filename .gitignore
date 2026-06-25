@@ -7,6 +7,9 @@ waterSample_shp/
 intermediate/
 outputs/
 
+# Local reference papers
+Identification_and_Monitoring_1.pdf
+
 # Operating system and editor files
 .DS_Store
 Thumbs.db
