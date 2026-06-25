@@ -58,6 +58,22 @@ var SVM_GAMMA = 0.01;
 
 var DRIVE_FOLDER = 'GEE_Gaoyou_Model_Comparison';
 
+// ============================================================================
+// 容量安全运行参数
+// ============================================================================
+//
+// GEE Code Editor不适合在一次运行中同时训练18套模型并生成9幅全域分类图。
+// 请修改EXPERIMENT_BATCH，按1—9逐批运行。每个批次同时完成：
+// 1. 随机70/30验证；
+// 2. 1 km空间分块70/30验证；
+// 3. 当前模型的空间分类GeoTIFF。
+//
+// 批次对应关系：
+// 1 RF+NDVI；2 CART+NDVI；3 SVM+NDVI
+// 4 RF+SAVI；5 CART+SAVI；6 SVM+SAVI
+// 7 RF+OSAVI；8 CART+OSAVI；9 SVM+OSAVI
+var EXPERIMENT_BATCH = 4;
+
 var aoi = ee.FeatureCollection(AOI_ASSET);
 var region = aoi.geometry();
 var rawLabel = ee.Image(LANDUSE_ASSET).select(LANDUSE_BAND);
@@ -226,8 +242,31 @@ var featureSets = [
   {name: 'OSAVI', image: osaviFeatures}
 ];
 
+var experimentCatalog = [
+  {batch: 1, algorithm: 'RF', indexName: 'NDVI', featureSet: featureSets[0]},
+  {batch: 2, algorithm: 'CART', indexName: 'NDVI', featureSet: featureSets[0]},
+  {batch: 3, algorithm: 'SVM', indexName: 'NDVI', featureSet: featureSets[0]},
+  {batch: 4, algorithm: 'RF', indexName: 'SAVI', featureSet: featureSets[1]},
+  {batch: 5, algorithm: 'CART', indexName: 'SAVI', featureSet: featureSets[1]},
+  {batch: 6, algorithm: 'SVM', indexName: 'SAVI', featureSet: featureSets[1]},
+  {batch: 7, algorithm: 'RF', indexName: 'OSAVI', featureSet: featureSets[2]},
+  {batch: 8, algorithm: 'CART', indexName: 'OSAVI', featureSet: featureSets[2]},
+  {batch: 9, algorithm: 'SVM', indexName: 'OSAVI', featureSet: featureSets[2]}
+];
+
+if (EXPERIMENT_BATCH < 1 || EXPERIMENT_BATCH > experimentCatalog.length) {
+  throw new Error('EXPERIMENT_BATCH必须为1—9之间的整数。');
+}
+
+var activeExperiment = experimentCatalog[EXPERIMENT_BATCH - 1];
+var activeFeatureSet = activeExperiment.featureSet;
+var activeAlgorithm = activeExperiment.algorithm;
+var activeIndexName = activeExperiment.indexName;
+var activeRunId = activeAlgorithm + '_' + activeIndexName;
+
 print('Sentinel-2影像数量：', s2.size());
-print('单套实验特征数量：', ndviFeatures.bandNames().size());
+print('当前实验批次：', EXPERIMENT_BATCH, activeRunId);
+print('当前实验特征数量：', activeFeatureSet.image.bandNames().size());
 
 // ============================================================================
 // 2. 固定样本位置与两种验证方式
@@ -385,8 +424,7 @@ function metricsFromSamples(samples) {
 var summaryRows = [];
 var classRows = [];
 var matrixRows = [];
-var spatialPredictionBands = [];
-var paperCandidateClassification = null;
+var activeSpatialClassification = null;
 
 function evaluateExperiment(
   featureSet,
@@ -481,40 +519,24 @@ function evaluateExperiment(
       .classify(classifier)
       .rename(algorithmName + '_' + featureSet.name)
       .toInt16();
-    spatialPredictionBands.push(prediction);
-
-    // 与参考论文相对应的候选结果：SAVI时序 + RF。
-    if (algorithmName === 'RF' && featureSet.name === 'SAVI') {
-      paperCandidateClassification = prediction;
-    }
+    activeSpatialClassification = prediction;
   }
 }
 
-for (var featureIndex = 0; featureIndex < featureSets.length; featureIndex++) {
-  for (
-    var algorithmIndex = 0;
-    algorithmIndex < algorithmConfigs.length;
-    algorithmIndex++
-  ) {
-    var currentFeatureSet = featureSets[featureIndex];
-    var currentAlgorithm = algorithmConfigs[algorithmIndex].name;
-
-    evaluateExperiment(
-      currentFeatureSet,
-      currentAlgorithm,
-      'random',
-      randomTrainPoints,
-      randomTestPoints
-    );
-    evaluateExperiment(
-      currentFeatureSet,
-      currentAlgorithm,
-      'spatial',
-      spatialTrainPoints,
-      spatialTestPoints
-    );
-  }
-}
+evaluateExperiment(
+  activeFeatureSet,
+  activeAlgorithm,
+  'random',
+  randomTrainPoints,
+  randomTestPoints
+);
+evaluateExperiment(
+  activeFeatureSet,
+  activeAlgorithm,
+  'spatial',
+  spatialTrainPoints,
+  spatialTestPoints
+);
 
 var summaryTable = ee.FeatureCollection(summaryRows);
 var classMetricTable = ee.FeatureCollection(classRows);
@@ -524,8 +546,8 @@ var completeAccuracyTable = summaryTable
   .merge(confusionTable);
 
 print(
-  '模型汇总结果（按Macro-F1降序）：',
-  summaryTable.sort('macro_f1', false)
+  '当前批次模型汇总结果：',
+  summaryTable
 );
 print('各类别Precision、Recall和F1：', classMetricTable);
 
@@ -533,68 +555,36 @@ print('各类别Precision、Recall和F1：', classMetricTable);
 // 4. 地图显示与导出
 // ============================================================================
 
-var spatialPredictionStack = ee.Image.cat(spatialPredictionBands);
-var paperCandidateDisplay = ee.Image(paperCandidateClassification);
+var activePredictionDisplay = ee.Image(activeSpatialClassification);
 
 Map.addLayer(
-  paperCandidateDisplay,
+  activePredictionDisplay,
   {min: 0, max: 4, palette: CLASS_PALETTE},
-  '论文参考候选：RF + SAVI + 空间验证',
+  '当前空间分类：' + activeRunId,
   true
-);
-Map.addLayer(
-  makeMonthlyIndexFeatures('NDVI'),
-  {},
-  'NDVI月时序特征',
-  false
-);
-Map.addLayer(
-  makeMonthlyIndexFeatures('SAVI'),
-  {},
-  'SAVI月时序特征',
-  false
-);
-Map.addLayer(
-  makeMonthlyIndexFeatures('OSAVI'),
-  {},
-  'OSAVI月时序特征',
-  false
 );
 
 Export.table.toDrive({
   collection: completeAccuracyTable,
-  description: 'Gaoyou_model_index_comparison_accuracy_2020',
+  description: 'Gaoyou_' + activeRunId + '_accuracy_2020',
   folder: DRIVE_FOLDER,
-  fileNamePrefix: 'gaoyou_model_index_comparison_accuracy_2020',
+  fileNamePrefix: 'gaoyou_' + activeRunId + '_accuracy_2020',
   fileFormat: 'CSV'
 });
 
 Export.table.toDrive({
-  collection: summaryTable.sort('macro_f1', false),
-  description: 'Gaoyou_model_index_comparison_summary_2020',
+  collection: summaryTable,
+  description: 'Gaoyou_' + activeRunId + '_summary_2020',
   folder: DRIVE_FOLDER,
-  fileNamePrefix: 'gaoyou_model_index_comparison_summary_2020',
+  fileNamePrefix: 'gaoyou_' + activeRunId + '_summary_2020',
   fileFormat: 'CSV'
 });
 
 Export.image.toDrive({
-  image: spatialPredictionStack.clip(region),
-  description: 'Gaoyou_nine_spatial_model_predictions_2020',
+  image: activePredictionDisplay.clip(region),
+  description: 'Gaoyou_' + activeRunId + '_spatial_prediction_2020',
   folder: DRIVE_FOLDER,
-  fileNamePrefix: 'gaoyou_nine_spatial_model_predictions_2020_10m',
-  region: region,
-  scale: SCALE,
-  crs: EXPORT_CRS,
-  maxPixels: 1e13,
-  fileFormat: 'GeoTIFF',
-  formatOptions: {cloudOptimized: true}
-});
-
-Export.image.toDrive({
-  image: paperCandidateDisplay.clip(region),
-  description: 'Gaoyou_RF_SAVI_spatial_prediction_2020',
-  folder: DRIVE_FOLDER,
-  fileNamePrefix: 'gaoyou_rf_savi_spatial_prediction_2020_10m',
+  fileNamePrefix: 'gaoyou_' + activeRunId + '_spatial_prediction_2020_10m',
   region: region,
   scale: SCALE,
   crs: EXPORT_CRS,
