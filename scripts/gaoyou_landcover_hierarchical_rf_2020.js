@@ -772,6 +772,15 @@ var allWaterQaSamples = waterTrainQa
   .merge(waterTuneQa)
   .merge(waterTestQa);
 
+// 将样本点栅格化到10 m输出网格：
+// 0=无样本，1=训练水体点，2=调参水体点，3=独立测试水体点。
+var waterSampleTypeRaster = allWaterQaSamples
+  .reduceToImage(['sample_type'], ee.Reducer.first())
+  .rename('water_sample_type')
+  .unmask(0)
+  .toByte()
+  .clip(region);
+
 print('人工质检水体训练点数量：', waterTrainQa.size());
 print('人工质检水体调参点数量：', waterTuneQa.size());
 print('人工质检独立测试水体点数量：', waterTestQa.size());
@@ -805,6 +814,16 @@ Map.addLayer(
   {},
   '人工质检-优先核查水体点',
   true
+);
+Map.addLayer(
+  waterSampleTypeRaster.selfMask(),
+  {
+    min: 1,
+    max: 3,
+    palette: ['00FFFF', '0055FF', 'FF00FF']
+  },
+  '水体样本类型栅格：训练/调参/测试',
+  false
 );
 
 // ============================================================================
@@ -1170,6 +1189,19 @@ Export.image.toDrive({
   description: 'Gaoyou_permanent_water_prediction_2020',
   folder: DRIVE_FOLDER,
   fileNamePrefix: 'gaoyou_permanent_water_prediction_2020_10m',
+  region: region,
+  scale: SCALE,
+  crs: EXPORT_CRS,
+  maxPixels: 1e13,
+  fileFormat: 'GeoTIFF',
+  formatOptions: {cloudOptimized: true}
+});
+
+Export.image.toDrive({
+  image: waterSampleTypeRaster,
+  description: 'Gaoyou_water_sample_types_2020',
+  folder: DRIVE_FOLDER,
+  fileNamePrefix: 'gaoyou_water_sample_types_2020_10m',
   region: region,
   scale: SCALE,
   crs: EXPORT_CRS,
