@@ -772,6 +772,57 @@ var allWaterQaSamples = waterTrainQa
   .merge(waterTuneQa)
   .merge(waterTestQa);
 
+// Shapefile 的 DBF 字段名通常最多 10 个字符。
+// 这里构建只含短字段名的质检图层，避免字段被截断后重名。
+// 人工核查字段约定：
+// man_label：-1=待核查，0=非水体，1=确认水体，2=不确定；
+// qa_stat：0=未核查，1=已核查。
+function prepareWaterShpSamples(samples) {
+  return samples.map(function(feature) {
+    return ee.Feature(feature.geometry(), {
+      samp_type: feature.get('sample_type'),
+      samp_name: feature.get('sample_type_name'),
+      orig_cls: feature.get('original_class_code'),
+      mdl_cls: feature.get('model_label'),
+      wat_lbl: feature.get('water_label'),
+      grid_id: feature.get('grid_id'),
+      lon: feature.get('longitude'),
+      lat: feature.get('latitude'),
+      wat_prob: feature.get('water_probability'),
+      wat_thr: feature.get('selected_water_threshold'),
+      jrc_occ: feature.get('JRC_occurrence'),
+      jrc_seas: feature.get('JRC_seasonality'),
+      jrc_rec: feature.get('JRC_recurrence'),
+      jrc_max: feature.get('JRC_max_extent'),
+      dw_water: feature.get('DW_water'),
+      dw_crops: feature.get('DW_crops'),
+      dw_flood: feature.get('DW_flooded_vegetation'),
+      wat_mon: feature.get('S2_water_month_count'),
+      veg_mon: feature.get('S2_vegetation_month_count'),
+      ndvi_avg: feature.get('NDVI_mean'),
+      ndvi_max: feature.get('NDVI_max'),
+      mndwi_avg: feature.get('MNDWI_mean'),
+      mndwi_max: feature.get('MNDWI_max'),
+      vv_avg: feature.get('VV_mean'),
+      vh_avg: feature.get('VH_mean'),
+      qa_susp: feature.get('qa_suspect'),
+      qa_reason: feature.get('qa_reason'),
+      man_label: -1,
+      qa_stat: 0,
+      qa_note: '',
+      reviewer: '',
+      rev_date: ''
+    });
+  });
+}
+
+var waterTrainShp = prepareWaterShpSamples(waterTrainQa);
+var waterTuneShp = prepareWaterShpSamples(waterTuneQa);
+var waterTestShp = prepareWaterShpSamples(waterTestQa);
+var allWaterShp = waterTrainShp
+  .merge(waterTuneShp)
+  .merge(waterTestShp);
+
 // 将样本点栅格化到10 m输出网格：
 // 0=无样本，1=训练水体点，2=调参水体点，3=独立测试水体点。
 var waterSampleTypeRaster = allWaterQaSamples
@@ -1256,27 +1307,27 @@ Export.table.toDrive({
 });
 
 Export.table.toDrive({
-  collection: waterTrainQa,
+  collection: waterTrainShp,
   description: 'Gaoyou_water_training_samples_QA_2020',
   folder: DRIVE_FOLDER,
   fileNamePrefix: 'gaoyou_water_training_samples_qa_2020',
-  fileFormat: 'GeoJSON'
+  fileFormat: 'SHP'
 });
 
 Export.table.toDrive({
-  collection: waterTuneQa,
+  collection: waterTuneShp,
   description: 'Gaoyou_water_tuning_samples_QA_2020',
   folder: DRIVE_FOLDER,
   fileNamePrefix: 'gaoyou_water_tuning_samples_qa_2020',
-  fileFormat: 'GeoJSON'
+  fileFormat: 'SHP'
 });
 
 Export.table.toDrive({
-  collection: waterTestQa,
+  collection: waterTestShp,
   description: 'Gaoyou_water_independent_test_samples_QA_2020',
   folder: DRIVE_FOLDER,
   fileNamePrefix: 'gaoyou_water_independent_test_samples_qa_2020',
-  fileFormat: 'GeoJSON'
+  fileFormat: 'SHP'
 });
 
 Export.table.toDrive({
@@ -1288,9 +1339,9 @@ Export.table.toDrive({
 });
 
 Export.table.toDrive({
-  collection: allWaterQaSamples,
+  collection: allWaterShp,
   description: 'Gaoyou_all_water_sample_points_2020',
   folder: DRIVE_FOLDER,
   fileNamePrefix: 'gaoyou_all_water_sample_points_2020',
-  fileFormat: 'GeoJSON'
+  fileFormat: 'SHP'
 });

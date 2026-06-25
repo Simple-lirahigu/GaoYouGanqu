@@ -37,7 +37,8 @@
 - 五类分层分类、耕地、永久水体概率和置信度 GeoTIFF
 - 独立测试精度、面积和两阶段变量重要性 CSV
 - 独立测试样本 GeoJSON
-- 水体训练、调参、独立测试人工质检点 GeoJSON，以及合并质检表 CSV
-- 合并水体样本点 GeoJSON：`sample_type=1/2/3` 分别表示训练、调参和独立测试点
+- 水体训练、调参、独立测试人工质检点 SHP，以及合并质检表 CSV
+- 合并水体样本点 SHP：`samp_type=1/2/3` 分别表示训练、调参和独立测试点
+- SHP内含人工核查字段：`man_label`、`qa_stat`、`qa_note`、`reviewer`、`rev_date`
 - 水体样本类型 GeoTIFF：`0=无样本，1=训练点，2=调参点，3=独立测试点`
 - 二值水体预测 GeoTIFF：`1=水体，0=非水体`；同时保留水体概率 GeoTIFF
