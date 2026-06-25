@@ -6,6 +6,11 @@
 - `scripts/gaoyou_landcover_rf_2020.js`：高邮地区 2020 年 S1/S2 多时相随机森林土地利用分类、空间验证和耕地面积统计。
 - `scripts/gaoyou_landcover_hierarchical_rf_2020.js`：增强版分层随机森林；先识别永久水体，再分类林地、耕地、建筑和其他，重点降低耕地误判水体。
 
+## 项目管理
+
+- `VERSIONING.md`：Git提交、实验分支、版本标签和GitHub Release规则。
+- `HISTORY_LOG.md`：按日期记录项目有效修改。
+
 ## 数据资产
 
 - 研究区：`projects/ee-yangsimple237/assets/GYBJ`
