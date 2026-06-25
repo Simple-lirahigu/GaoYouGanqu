@@ -22,9 +22,6 @@
 
 var AOI_ASSET = 'projects/ee-yangsimple237/assets/GYBJ';
 var LANDUSE_ASSET = 'projects/ee-yangsimple237/assets/2020tudi';
-// 将 waterSample_shp 中修正后的 SHP 上传到此 GEE 表资产。
-var REVIEWED_WATER_ASSET =
-  'projects/ee-yangsimple237/assets/gaoyou_water_samples_reviewed_2020';
 var LANDUSE_BAND = 'b1';
 
 var START_DATE = '2020-01-01';
@@ -413,47 +410,34 @@ Map.addLayer(
 // 5. 样本抽取
 // ============================================================================
 
-// 人工修正水体样本：
-// samp_type：1训练、2调参、3独立测试；
-// man_label：0非水体、1水体；
-// qa_stat：1表示已经人工核查。
-// 脚本只筛选有效记录，不修改或删除原始资产中的任何点。
-var reviewedWaterRaw = ee.FeatureCollection(REVIEWED_WATER_ASSET)
-  .filter(ee.Filter.eq('qa_stat', 1))
-  .filter(ee.Filter.inList('samp_type', [1, 2, 3]))
-  .filter(ee.Filter.inList('man_label', [0, 1]));
+var waterBinaryLabel = cleanModelLabel.eq(WATER_MODEL_CODE)
+  .rename('water_label')
+  .toInt16();
+var waterSampleSource = waterPredictors
+  .addBands(cleanModelLabel)
+  .addBands(waterBinaryLabel)
+  .addBands(gridId);
 
-function prepareReviewedWaterSamples(sampleType, splitName) {
-  var reviewedSubset = reviewedWaterRaw.filter(
-    ee.Filter.eq('samp_type', sampleType)
-  );
-  return waterPredictors.sampleRegions({
-    collection: reviewedSubset,
-    properties: [
-      'samp_type', 'man_label', 'qa_stat', 'grid_id',
-      'qa_note', 'reviewer', 'rev_date'
-    ],
+function sampleWater(splitMaskValue, pointsPerClass, splitName, seedOffset) {
+  return waterSampleSource.updateMask(splitMaskValue).stratifiedSample({
+    numPoints: 0,
+    classBand: 'water_label',
+    classValues: [0, 1],
+    classPoints: [pointsPerClass, pointsPerClass],
+    region: region,
     scale: SCALE,
     projection: sampleProjection,
+    seed: RANDOM_SEED + seedOffset,
+    dropNulls: true,
     tileScale: 4,
     geometries: true
   }).map(function(feature) {
-    var waterLabel = ee.Number(feature.get('man_label')).int();
-    return feature.set({
-      water_label: waterLabel,
-      // 人工非水体点只用于水体二分类，未知其具体四分类类别。
-      model_label: ee.Algorithms.If(waterLabel.eq(1), WATER_MODEL_CODE, -1),
-      sample_split: splitName
-    });
+    return feature.set('sample_split', splitName);
   });
 }
 
-var waterTrain = prepareReviewedWaterSamples(1, 'reviewed_water_train');
-var waterTune = prepareReviewedWaterSamples(2, 'reviewed_water_tune');
-var reviewedWaterTest = prepareReviewedWaterSamples(
-  3,
-  'reviewed_water_independent_test'
-);
+var waterTrain = sampleWater(trainMask, WATER_TRAIN_PER_CLASS, 'water_train', 10);
+var waterTune = sampleWater(tuneMask, WATER_TUNE_PER_CLASS, 'water_tune', 11);
 
 var nonwaterLabel = cleanModelLabel
   .updateMask(cleanModelLabel.neq(WATER_MODEL_CODE))
@@ -523,12 +507,8 @@ var rawTestPoints = modelLabel.addBands(gridId)
     return feature.set('sample_split', 'independent_test');
   });
 
-print('人工修正水体训练样本：', waterTrain.aggregate_histogram('water_label'));
-print('人工修正水体调参样本：', waterTune.aggregate_histogram('water_label'));
-print(
-  '人工修正水体独立测试样本：',
-  reviewedWaterTest.aggregate_histogram('water_label')
-);
+print('水体训练样本：', waterTrain.aggregate_histogram('water_label'));
+print('水体调参样本：', waterTune.aggregate_histogram('water_label'));
 print('非水体训练样本：', nonwaterTrain.aggregate_histogram('nonwater_label'));
 print('非水体调参样本：', nonwaterTune.aggregate_histogram('nonwater_label'));
 print('独立测试样本：', rawTestPoints.aggregate_histogram('model_label'));
@@ -604,7 +584,7 @@ waterCandidates.forEach(function(config) {
   var probability = probabilityOfClassOne(classifier, waterPredictors);
   var tuneWithProbability = probability.sampleRegions({
     collection: waterTune,
-    properties: ['water_label', 'model_label', 'grid_id', 'samp_type'],
+    properties: ['water_label', 'model_label', 'grid_id'],
     scale: SCALE,
     projection: sampleProjection,
     tileScale: 4,
@@ -627,21 +607,21 @@ waterCandidates.forEach(function(config) {
     var f1 = ee.List(metrics.get('f1'));
     var waterF1 = ee.Number(f1.get(1));
 
-    var reviewedNonwaterRows = assessed.filter(
-      ee.Filter.eq('water_label', 0)
+    var croplandRows = assessed.filter(
+      ee.Filter.eq('model_label', CROPLAND_MODEL_CODE)
     );
-    var reviewedFalseWater = reviewedNonwaterRows.filter(
+    var croplandFalseWater = croplandRows.filter(
       ee.Filter.eq('water_prediction', 1)
     ).size();
-    var reviewedNonwaterFpr = ee.Number(ee.Algorithms.If(
-      reviewedNonwaterRows.size().gt(0),
-      ee.Number(reviewedFalseWater).divide(reviewedNonwaterRows.size()),
+    var croplandWaterFpr = ee.Number(ee.Algorithms.If(
+      croplandRows.size().gt(0),
+      ee.Number(croplandFalseWater).divide(croplandRows.size()),
       0
     ));
 
-    // 水体F1优先，同时惩罚人工确认非水体被误判为水体。
+    // 直接惩罚耕地误判水体。水体F1优先，其次降低耕地假水体率和提高OA。
     var selectionScore = waterF1
-      .subtract(reviewedNonwaterFpr.multiply(0.75))
+      .subtract(croplandWaterFpr.multiply(0.75))
       .add(ee.Number(metrics.get('overall_accuracy')).multiply(0.01));
 
     waterTuneRows.push(ee.Feature(null, {
@@ -651,7 +631,7 @@ waterCandidates.forEach(function(config) {
       minLeafPopulation: config.minLeaf,
       threshold: threshold,
       water_f1: waterF1,
-      reviewed_nonwater_fpr: reviewedNonwaterFpr,
+      cropland_to_water_fpr: croplandWaterFpr,
       overall_accuracy: metrics.get('overall_accuracy'),
       kappa: metrics.get('kappa'),
       selection_score: selectionScore
@@ -684,212 +664,6 @@ var finalWaterProbability = probabilityOfClassOne(
 );
 var bestWaterThreshold = ee.Number(bestWater.get('threshold'));
 var finalWaterMask = finalWaterProbability.gte(bestWaterThreshold);
-// 最终二值水体预测：1=水体，0=非水体。
-var finalWaterPrediction = finalWaterMask
-  .unmask(0)
-  .rename('water_prediction')
-  .toByte();
-
-// ============================================================================
-// 7.1 水体样本人工质检数据
-// ============================================================================
-
-// 仅导出人工判断水体真伪所需的核心字段，避免把全部月尺度特征写入文件。
-var waterQaImage = finalWaterProbability
-  .addBands(jrc)
-  .addBands(dynamicWorld)
-  .addBands(waterMonthCount)
-  .addBands(vegetationMonthCount)
-  .addBands(s2AnnualStats.select([
-    'NDVI_mean', 'NDVI_max', 'NDVI_stdDev',
-    'MNDWI_mean', 'MNDWI_max', 'MNDWI_stdDev'
-  ]))
-  .addBands(s1AnnualStats.select([
-    'VV_mean', 'VV_min', 'VV_max', 'VV_stdDev',
-    'VH_mean', 'VH_min', 'VH_max', 'VH_stdDev'
-  ]));
-
-var waterQaProperties = [
-  'sample_split',
-  'grid_id',
-  'model_label',
-  'water_label'
-];
-
-function prepareWaterQaSamples(points, sourceName, sampleType) {
-  var sampled = waterQaImage.sampleRegions({
-    collection: points,
-    properties: waterQaProperties,
-    scale: SCALE,
-    projection: sampleProjection,
-    tileScale: 4,
-    geometries: true
-  });
-
-  return sampled.map(function(feature) {
-    var coordinates = feature.geometry().coordinates();
-    var jrcOccurrence = ee.Number(feature.get('JRC_occurrence'));
-    var dwWater = ee.Number(feature.get('DW_water'));
-    var waterMonths = ee.Number(feature.get('S2_water_month_count'));
-    var vegetationMonths = ee.Number(feature.get('S2_vegetation_month_count'));
-    var waterProbability = ee.Number(feature.get('water_probability'));
-
-    // 仅作人工检查提示：历史水体、年度模型和月度持续性证据均较弱，
-    // 或植被月份较多时，优先核查。不能据此自动删除样本。
-    var weakWaterEvidence = jrcOccurrence.lt(25)
-      .and(dwWater.lt(0.40))
-      .and(waterMonths.lte(2));
-    var cropLikeEvidence = vegetationMonths.gte(3)
-      .and(waterProbability.lt(0.75));
-    var qaSuspect = weakWaterEvidence.or(cropLikeEvidence);
-
-    return feature.set({
-      qa_source: sourceName,
-      // 1=训练点，2=调参点，3=独立测试点。
-      sample_type: sampleType,
-      sample_type_name: sourceName,
-      longitude: coordinates.get(0),
-      latitude: coordinates.get(1),
-      original_class_code: 1,
-      class_name: '水体',
-      selected_water_threshold: bestWaterThreshold,
-      qa_suspect: ee.Number(ee.Algorithms.If(qaSuspect, 1, 0)),
-      qa_reason: ee.String(ee.Algorithms.If(
-        weakWaterEvidence,
-        'weak_persistent_water_evidence',
-        ee.Algorithms.If(
-          cropLikeEvidence,
-          'seasonal_vegetation_or_cropland_signal',
-          'no_automatic_warning'
-        )
-      ))
-    });
-  });
-}
-
-var waterTrainQa = prepareWaterQaSamples(
-  waterTrain.filter(ee.Filter.eq('water_label', 1)),
-  'water_training',
-  1
-);
-var waterTuneQa = prepareWaterQaSamples(
-  waterTune.filter(ee.Filter.eq('water_label', 1)),
-  'water_tuning',
-  2
-);
-var waterTestQa = prepareWaterQaSamples(
-  reviewedWaterTest.filter(ee.Filter.eq('water_label', 1)),
-  'water_independent_test',
-  3
-);
-var allWaterQaSamples = waterTrainQa
-  .merge(waterTuneQa)
-  .merge(waterTestQa);
-
-// Shapefile 的 DBF 字段名通常最多 10 个字符。
-// 这里构建只含短字段名的质检图层，避免字段被截断后重名。
-// 人工核查字段约定：
-// man_label：-1=待核查，0=非水体，1=确认水体，2=不确定；
-// qa_stat：0=未核查，1=已核查。
-function prepareWaterShpSamples(samples) {
-  return samples.map(function(feature) {
-    return ee.Feature(feature.geometry(), {
-      samp_type: feature.get('sample_type'),
-      samp_name: feature.get('sample_type_name'),
-      orig_cls: feature.get('original_class_code'),
-      mdl_cls: feature.get('model_label'),
-      wat_lbl: feature.get('water_label'),
-      grid_id: feature.get('grid_id'),
-      lon: feature.get('longitude'),
-      lat: feature.get('latitude'),
-      wat_prob: feature.get('water_probability'),
-      wat_thr: feature.get('selected_water_threshold'),
-      jrc_occ: feature.get('JRC_occurrence'),
-      jrc_seas: feature.get('JRC_seasonality'),
-      jrc_rec: feature.get('JRC_recurrence'),
-      jrc_max: feature.get('JRC_max_extent'),
-      dw_water: feature.get('DW_water'),
-      dw_crops: feature.get('DW_crops'),
-      dw_flood: feature.get('DW_flooded_vegetation'),
-      wat_mon: feature.get('S2_water_month_count'),
-      veg_mon: feature.get('S2_vegetation_month_count'),
-      ndvi_avg: feature.get('NDVI_mean'),
-      ndvi_max: feature.get('NDVI_max'),
-      mndwi_avg: feature.get('MNDWI_mean'),
-      mndwi_max: feature.get('MNDWI_max'),
-      vv_avg: feature.get('VV_mean'),
-      vh_avg: feature.get('VH_mean'),
-      qa_susp: feature.get('qa_suspect'),
-      qa_reason: feature.get('qa_reason'),
-      man_label: -1,
-      qa_stat: 0,
-      qa_note: '',
-      reviewer: '',
-      rev_date: ''
-    });
-  });
-}
-
-var waterTrainShp = prepareWaterShpSamples(waterTrainQa);
-var waterTuneShp = prepareWaterShpSamples(waterTuneQa);
-var waterTestShp = prepareWaterShpSamples(waterTestQa);
-var allWaterShp = waterTrainShp
-  .merge(waterTuneShp)
-  .merge(waterTestShp);
-
-// 将样本点栅格化到10 m输出网格：
-// 0=无样本，1=训练水体点，2=调参水体点，3=独立测试水体点。
-var waterSampleTypeRaster = allWaterQaSamples
-  .reduceToImage(['sample_type'], ee.Reducer.first())
-  .rename('water_sample_type')
-  .unmask(0)
-  .toByte()
-  .clip(region);
-
-print('人工质检水体训练点数量：', waterTrainQa.size());
-print('人工质检水体调参点数量：', waterTuneQa.size());
-print('人工质检独立测试水体点数量：', waterTestQa.size());
-print(
-  '自动提示需优先核查的水体点数量：',
-  allWaterQaSamples.filter(ee.Filter.eq('qa_suspect', 1)).size()
-);
-
-Map.addLayer(
-  waterTrainQa.style({color: '00FFFF', pointSize: 4}),
-  {},
-  '人工质检-水体训练点',
-  false
-);
-Map.addLayer(
-  waterTuneQa.style({color: '0055FF', pointSize: 4}),
-  {},
-  '人工质检-水体调参点',
-  false
-);
-Map.addLayer(
-  waterTestQa.style({color: 'FF00FF', pointSize: 4}),
-  {},
-  '人工质检-独立测试水体点',
-  false
-);
-Map.addLayer(
-  allWaterQaSamples
-    .filter(ee.Filter.eq('qa_suspect', 1))
-    .style({color: 'FF0000', pointSize: 6}),
-  {},
-  '人工质检-优先核查水体点',
-  true
-);
-Map.addLayer(
-  waterSampleTypeRaster.selfMask(),
-  {
-    min: 1,
-    max: 3,
-    palette: ['00FFFF', '0055FF', 'FF00FF']
-  },
-  '水体样本类型栅格：训练/调参/测试',
-  false
-);
 
 // ============================================================================
 // 8. 第二层：非水体四分类调参
@@ -977,24 +751,10 @@ var finalOriginalClass = hierarchicalModelClass
 // 9. 独立测试
 // ============================================================================
 
-// 五分类水体测试点使用人工确认的独立水体样本；
-// 林地、耕地、建筑和其他仍使用原空间独立测试点。
-var reviewedConfirmedWaterTest = reviewedWaterTest
-  .filter(ee.Filter.eq('water_label', 1))
-  .map(function(feature) {
-    return feature.set('model_label', WATER_MODEL_CODE);
-  });
-var nonwaterClassTestPoints = rawTestPoints.filter(
-  ee.Filter.neq('model_label', WATER_MODEL_CODE)
-);
-var combinedClassTestPoints = nonwaterClassTestPoints.merge(
-  reviewedConfirmedWaterTest
-);
-
 var testAssessed = hierarchicalModelClass
   .addBands(finalWaterProbability)
   .sampleRegions({
-    collection: combinedClassTestPoints,
+    collection: rawTestPoints,
     properties: ['model_label', 'grid_id'],
     scale: SCALE,
     projection: sampleProjection,
@@ -1009,37 +769,6 @@ var finalMetrics = multiclassMetrics(
   MODEL_CLASSES
 );
 var finalF1 = ee.List(finalMetrics.get('f1'));
-
-// 人工修正水体测试集的独立二分类评价。
-var reviewedWaterTestAssessed = finalWaterProbability.sampleRegions({
-  collection: reviewedWaterTest,
-  properties: [
-    'water_label', 'samp_type', 'grid_id',
-    'qa_note', 'reviewer', 'rev_date'
-  ],
-  scale: SCALE,
-  projection: sampleProjection,
-  tileScale: 4,
-  geometries: true
-}).map(function(feature) {
-  return feature.set(
-    'water_prediction',
-    ee.Number(feature.get('water_probability')).gte(bestWaterThreshold).int()
-  );
-});
-var reviewedWaterTestMetrics = multiclassMetrics(
-  reviewedWaterTestAssessed,
-  'water_label',
-  'water_prediction',
-  [0, 1]
-);
-var reviewedWaterTestF1 = ee.List(reviewedWaterTestMetrics.get('f1'));
-var reviewedWaterTestProducer = ee.List(
-  reviewedWaterTestMetrics.get('producer_accuracy')
-);
-var reviewedWaterTestUser = ee.List(
-  reviewedWaterTestMetrics.get('user_accuracy')
-);
 
 var testCropland = testAssessed.filter(
   ee.Filter.eq('model_label', CROPLAND_MODEL_CODE)
@@ -1073,23 +802,6 @@ print('水体 F1：', finalF1.get(0));
 print('耕地 F1：', finalF1.get(2));
 print('耕地误判为水体比例：', croplandToWaterRate);
 print('水体误判为耕地比例：', waterToCroplandRate);
-print(
-  '人工水体测试集二分类混淆矩阵：',
-  reviewedWaterTestMetrics.get('matrix')
-);
-print(
-  '人工水体测试集二分类 OA：',
-  reviewedWaterTestMetrics.get('overall_accuracy')
-);
-print('人工水体测试集水体 F1：', reviewedWaterTestF1.get(1));
-print(
-  '人工水体测试集非水体误判水体率：',
-  ee.Number(1).subtract(ee.Number(reviewedWaterTestProducer.get(0)))
-);
-print(
-  '人工水体测试集水体漏判率：',
-  ee.Number(1).subtract(ee.Number(reviewedWaterTestProducer.get(1)))
-);
 
 // ============================================================================
 // 10. 置信度、面积和显示
@@ -1118,12 +830,6 @@ Map.addLayer(
   finalWaterProbability,
   {min: 0, max: 1, palette: ['FFFFFF', '80B1D3', '08519C']},
   '永久水体概率',
-  false
-);
-Map.addLayer(
-  finalWaterPrediction.selfMask(),
-  {min: 1, max: 1, palette: ['0066FF']},
-  '最终二值水体预测',
   false
 );
 Map.addLayer(
@@ -1213,36 +919,6 @@ var summaryFeature = ee.Feature(null, {
   cropland_f1: f1.get(2),
   cropland_to_water_rate: croplandToWaterRate,
   water_to_cropland_rate: waterToCroplandRate,
-  water_probability_threshold: bestWaterThreshold,
-  reviewed_water_binary_oa: reviewedWaterTestMetrics.get('overall_accuracy'),
-  reviewed_water_binary_kappa: reviewedWaterTestMetrics.get('kappa'),
-  reviewed_water_f1: reviewedWaterTestF1.get(1),
-  reviewed_nonwater_f1: reviewedWaterTestF1.get(0),
-  reviewed_water_precision: reviewedWaterTestUser.get(1),
-  reviewed_water_recall: reviewedWaterTestProducer.get(1),
-  reviewed_nonwater_false_positive_rate: ee.Number(1).subtract(
-    ee.Number(reviewedWaterTestProducer.get(0))
-  ),
-  reviewed_water_false_negative_rate: ee.Number(1).subtract(
-    ee.Number(reviewedWaterTestProducer.get(1))
-  )
-});
-
-var reviewedWaterBinarySummary = ee.Feature(null, {
-  record_type: 'reviewed_water_binary_test',
-  test_sample_count: reviewedWaterTestAssessed.size(),
-  overall_accuracy: reviewedWaterTestMetrics.get('overall_accuracy'),
-  kappa: reviewedWaterTestMetrics.get('kappa'),
-  nonwater_f1: reviewedWaterTestF1.get(0),
-  water_f1: reviewedWaterTestF1.get(1),
-  water_precision: reviewedWaterTestUser.get(1),
-  water_recall: reviewedWaterTestProducer.get(1),
-  nonwater_false_positive_rate: ee.Number(1).subtract(
-    ee.Number(reviewedWaterTestProducer.get(0))
-  ),
-  water_false_negative_rate: ee.Number(1).subtract(
-    ee.Number(reviewedWaterTestProducer.get(1))
-  ),
   water_probability_threshold: bestWaterThreshold
 });
 
@@ -1277,7 +953,6 @@ for (var actualIndex = 0; actualIndex < MODEL_CLASSES.length; actualIndex++) {
 }
 
 var accuracyTable = ee.FeatureCollection([summaryFeature])
-  .merge(ee.FeatureCollection([reviewedWaterBinarySummary]))
   .merge(ee.FeatureCollection(classMetricRows))
   .merge(ee.FeatureCollection(matrixRows))
   .merge(waterTuningTable)
@@ -1343,32 +1018,6 @@ Export.image.toDrive({
 });
 
 Export.image.toDrive({
-  image: finalWaterPrediction.clip(region),
-  description: 'Gaoyou_permanent_water_prediction_2020',
-  folder: DRIVE_FOLDER,
-  fileNamePrefix: 'gaoyou_permanent_water_prediction_2020_10m',
-  region: region,
-  scale: SCALE,
-  crs: EXPORT_CRS,
-  maxPixels: 1e13,
-  fileFormat: 'GeoTIFF',
-  formatOptions: {cloudOptimized: true}
-});
-
-Export.image.toDrive({
-  image: waterSampleTypeRaster,
-  description: 'Gaoyou_water_sample_types_2020',
-  folder: DRIVE_FOLDER,
-  fileNamePrefix: 'gaoyou_water_sample_types_2020_10m',
-  region: region,
-  scale: SCALE,
-  crs: EXPORT_CRS,
-  maxPixels: 1e13,
-  fileFormat: 'GeoTIFF',
-  formatOptions: {cloudOptimized: true}
-});
-
-Export.image.toDrive({
   image: confidence.clip(region),
   description: 'Gaoyou_hierarchical_RF_confidence_2020',
   folder: DRIVE_FOLDER,
@@ -1411,52 +1060,4 @@ Export.table.toDrive({
   folder: DRIVE_FOLDER,
   fileNamePrefix: 'gaoyou_hierarchical_rf_independent_test_points_2020',
   fileFormat: 'GeoJSON'
-});
-
-Export.table.toDrive({
-  collection: reviewedWaterTestAssessed,
-  description: 'Gaoyou_reviewed_water_test_predictions_2020',
-  folder: DRIVE_FOLDER,
-  fileNamePrefix: 'gaoyou_reviewed_water_test_predictions_2020',
-  fileFormat: 'CSV'
-});
-
-Export.table.toDrive({
-  collection: waterTrainShp,
-  description: 'Gaoyou_water_training_samples_QA_2020',
-  folder: DRIVE_FOLDER,
-  fileNamePrefix: 'gaoyou_water_training_samples_qa_2020',
-  fileFormat: 'SHP'
-});
-
-Export.table.toDrive({
-  collection: waterTuneShp,
-  description: 'Gaoyou_water_tuning_samples_QA_2020',
-  folder: DRIVE_FOLDER,
-  fileNamePrefix: 'gaoyou_water_tuning_samples_qa_2020',
-  fileFormat: 'SHP'
-});
-
-Export.table.toDrive({
-  collection: waterTestShp,
-  description: 'Gaoyou_water_independent_test_samples_QA_2020',
-  folder: DRIVE_FOLDER,
-  fileNamePrefix: 'gaoyou_water_independent_test_samples_qa_2020',
-  fileFormat: 'SHP'
-});
-
-Export.table.toDrive({
-  collection: allWaterQaSamples,
-  description: 'Gaoyou_all_water_samples_QA_2020',
-  folder: DRIVE_FOLDER,
-  fileNamePrefix: 'gaoyou_all_water_samples_qa_2020',
-  fileFormat: 'CSV'
-});
-
-Export.table.toDrive({
-  collection: allWaterShp,
-  description: 'Gaoyou_all_water_sample_points_2020',
-  folder: DRIVE_FOLDER,
-  fileNamePrefix: 'gaoyou_all_water_sample_points_2020',
-  fileFormat: 'SHP'
 });

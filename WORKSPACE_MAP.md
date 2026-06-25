@@ -6,6 +6,13 @@
 - `scripts/gaoyou_landcover_rf_2020.js`：高邮地区 2020 年 S1/S2 多时相随机森林土地利用分类、空间验证和耕地面积统计。
 - `scripts/gaoyou_landcover_hierarchical_rf_2020.js`：增强版分层随机森林；先识别永久水体，再分类林地、耕地、建筑和其他，重点降低耕地误判水体。
 
+当前主脚本已回退到 `v0.2.0` 状态，不包含水体样本点导出和人工修正样本重训练。相关实现仍保留在以下Git分支：
+
+- `feature/water-sample-exports`
+- `feature/water-sample-raster`
+- `feature/water-sample-shapefile`
+- `feature/reviewed-water-retraining`
+
 ## 项目管理
 
 - `VERSIONING.md`：Git提交、实验分支、版本标签和GitHub Release规则。

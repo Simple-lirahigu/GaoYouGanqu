@@ -41,6 +41,11 @@
 - 增强版水体模型改用人工资产 `projects/ee-yangsimple237/assets/gaoyou_water_samples_reviewed_2020`，`man_label=0`作为非水体负样本，`man_label=1`作为水体正样本。
 - 五分类测试的水体类使用人工确认测试水体点；其他四类沿用原空间独立测试点，同时单独输出人工水体二分类精度。
 
+## 当前主脚本状态
+
+- 2026-06-25按用户要求，`scripts/gaoyou_landcover_hierarchical_rf_2020.js` 已回退到 `v0.2.0` 的未导出水体样本点版本。
+- 水体样本SHP/TIF导出和人工修正样本重训练实现仅保留在Git历史及对应功能分支，不再是当前 `main` 主脚本行为。
+
 ## 重要限制
 
 - 灌溉是管理属性，仅靠土地利用类型不能直接得到可靠标签。
