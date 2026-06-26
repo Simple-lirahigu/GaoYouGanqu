@@ -4,7 +4,7 @@
  * 目标：
  * - 将原五类土地利用问题简化为“耕地 vs 非耕地”二分类；
  * - 融合 Sentinel-2 光学指数、Sentinel-1 SAR 时序和物候特征；
- * - 支持 RF 与 GTB 模型；
+ * - 当前默认只用 RF 跑通流程；GTB 代码保留，后续需要时再开启对比；
  * - 输出 OA、Kappa、PA、UA、F1、Macro-F1 和耕地面积；
  * - 默认一年一个模型运行，避免 GEE 容量超限。
  *
@@ -21,8 +21,8 @@
 // 目标年份。逐年运行时只改这一行，例如 2021、2022、2023。
 var TARGET_YEAR = 2020;
 
-// 模型名称：'RF' 或 'GTB'。建议先比较 RF 与 GTB，再固定最优模型做多年制图。
-var MODEL_NAME = 'GTB';
+// 模型名称：先只用 'RF' 跑通流程；后续如需对比增强模型，可改为 'GTB'。
+var MODEL_NAME = 'RF';
 
 // 是否额外导出当前年份的耕地二值 GeoTIFF。只做精度表时保持 false。
 var EXPORT_CROPLAND_TIF = false;
@@ -75,7 +75,7 @@ var RF_MTRY = 12;
 var RF_MIN_LEAF = 2;
 var RF_BAG_FRACTION = 0.7;
 
-// GTB 参数。GTB 往往能提升复杂边界分类，但也更容易过拟合，需要看空间验证。
+// GTB 参数暂时保留，当前默认不启用；后续需要模型对比时再将 MODEL_NAME 改为 'GTB'。
 var GTB_TREES = 300;
 var GTB_SHRINKAGE = 0.05;
 var GTB_SAMPLING_RATE = 0.7;
