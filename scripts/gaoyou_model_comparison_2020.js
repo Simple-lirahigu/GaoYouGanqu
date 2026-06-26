@@ -465,6 +465,8 @@ function evaluateExperiment(
 
   summaryRows.push(ee.Feature(null, {
     record_type: 'experiment_summary',
+    batch: EXPERIMENT_BATCH,
+    run_id: activeRunId,
     experiment_id: experimentId,
     algorithm: algorithmName,
     index_set: featureSet.name,
@@ -479,6 +481,8 @@ function evaluateExperiment(
   for (var classIndex = 0; classIndex < MODEL_CLASSES.length; classIndex++) {
     classRows.push(ee.Feature(null, {
       record_type: 'class_metric',
+      batch: EXPERIMENT_BATCH,
+      run_id: activeRunId,
       experiment_id: experimentId,
       algorithm: algorithmName,
       index_set: featureSet.name,
@@ -501,6 +505,8 @@ function evaluateExperiment(
     ) {
       matrixRows.push(ee.Feature(null, {
         record_type: 'confusion_matrix',
+        batch: EXPERIMENT_BATCH,
+        run_id: activeRunId,
         experiment_id: experimentId,
         algorithm: algorithmName,
         index_set: featureSet.name,
@@ -545,11 +551,77 @@ var completeAccuracyTable = summaryTable
   .merge(classMetricTable)
   .merge(confusionTable);
 
+var summaryDisplayTable = summaryTable.select([
+  'batch',
+  'run_id',
+  'experiment_id',
+  'algorithm',
+  'index_set',
+  'validation',
+  'train_sample_count',
+  'test_sample_count',
+  'overall_accuracy',
+  'kappa',
+  'macro_f1'
+]);
+
+var classMetricDisplayTable = classMetricTable.select([
+  'batch',
+  'run_id',
+  'experiment_id',
+  'validation',
+  'model_code',
+  'original_code',
+  'class_name',
+  'precision',
+  'recall',
+  'f1'
+]);
+
+var randomClassMetricTable = classMetricDisplayTable
+  .filter(ee.Filter.eq('validation', 'random'));
+var spatialClassMetricTable = classMetricDisplayTable
+  .filter(ee.Filter.eq('validation', 'spatial'));
+
 print(
-  '当前批次模型汇总结果：',
-  summaryTable
+  '当前批次精度汇总表（FeatureCollection，可展开查看）：',
+  summaryDisplayTable
 );
-print('各类别Precision、Recall和F1：', classMetricTable);
+print(
+  '当前批次精度汇总表（Table 图表）：',
+  ui.Chart.feature.byFeature(
+    summaryDisplayTable,
+    'validation',
+    [
+      'overall_accuracy',
+      'kappa',
+      'macro_f1',
+      'train_sample_count',
+      'test_sample_count'
+    ]
+  ).setChartType('Table')
+);
+print('随机验证各类别 Precision / Recall / F1 表：', randomClassMetricTable);
+print(
+  '随机验证各类别 Precision / Recall / F1（Table 图表）：',
+  ui.Chart.feature.byFeature(
+    randomClassMetricTable,
+    'class_name',
+    ['precision', 'recall', 'f1']
+  ).setChartType('Table')
+);
+print('空间分块验证各类别 Precision / Recall / F1 表：', spatialClassMetricTable);
+print(
+  '空间分块验证各类别 Precision / Recall / F1（Table 图表）：',
+  ui.Chart.feature.byFeature(
+    spatialClassMetricTable,
+    'class_name',
+    ['precision', 'recall', 'f1']
+  ).setChartType('Table')
+);
+print(
+  '说明：为避免 GEE 容量超限，脚本每次只运行一个批次。请依次设置 EXPERIMENT_BATCH=1 至 9，导出各批次 CSV 后合并，即可得到 9 个批次总表。'
+);
 
 // ============================================================================
 // 4. 地图显示与导出
