@@ -21,10 +21,16 @@
 // 0. 参数
 // ============================================================================
 
+// 每次运行通常只需要修改下面两行：
+// 1. TARGET_YEAR：目标年份，例如 2020、2021、2022。
+// 2. EXPERIMENT_BATCH：模型批次，1—9；一年一个批次运行，最稳。
 var TARGET_YEAR = 2020;
+var EXPERIMENT_BATCH = 4;
 var YEAR_TEXT = String(TARGET_YEAR);
 
 var AOI_ASSET = 'projects/ee-yangsimple237/assets/GYBJ';
+// 土地利用标签资产表。2021—2025 需要先填入你自己的 GEE 资产路径。
+// 填好后，每次只改 TARGET_YEAR，不需要再改 LANDUSE_ASSET。
 var LANDUSE_ASSETS_BY_YEAR = {
   '2020': 'projects/ee-yangsimple237/assets/2020tudi',
   '2021': '',
@@ -72,6 +78,7 @@ var SVM_COST = 10;
 var SVM_GAMMA = 0.01;
 
 var DRIVE_FOLDER = 'GEE_Gaoyou_Model_Comparison';
+// 多年批量计算时建议只导出精度表，分类 GeoTIFF 按需打开。
 var EXPORT_ACCURACY_TABLES = true;
 var EXPORT_SPATIAL_PREDICTION = false;
 
@@ -79,18 +86,17 @@ var EXPORT_SPATIAL_PREDICTION = false;
 // 容量安全运行参数
 // ============================================================================
 //
-// GEE Code Editor不适合在一次运行中同时训练18套模型并生成9幅全域分类图。
-// 请修改EXPERIMENT_BATCH，按1—9逐批运行。每个批次同时完成：
+// GEE Code Editor不适合一次运行多年、多批次模型，容易 capacity exceeded。
+// 建议采用“一年一个批次”的方式：改 TARGET_YEAR 和 EXPERIMENT_BATCH 后运行。
+// 每个批次会完成：
 // 1. 随机70/30验证；
 // 2. 1 km空间分块70/30验证；
-// 3. 当前模型的空间分类GeoTIFF。
+// 3. 精度CSV导出；若 EXPORT_SPATIAL_PREDICTION=true，再导出空间分类GeoTIFF。
 //
 // 批次对应关系：
 // 1 RF+NDVI；2 CART+NDVI；3 SVM+NDVI
 // 4 RF+SAVI；5 CART+SAVI；6 SVM+SAVI
 // 7 RF+OSAVI；8 CART+OSAVI；9 SVM+OSAVI
-var EXPERIMENT_BATCH = 4;
-
 var aoi = ee.FeatureCollection(AOI_ASSET);
 var region = aoi.geometry();
 var rawLabel = ee.Image(LANDUSE_ASSET).select(LANDUSE_BAND);
