@@ -1,5 +1,5 @@
 /**
- * 高邮地区 2020 年模型与植被指数对比实验
+ * 高邮地区年度模型与植被指数对比实验
  *
  * 实验因素：
  * 1. 分类器：RF、CART、SVM；
@@ -21,12 +21,27 @@
 // 0. 参数
 // ============================================================================
 
+var TARGET_YEAR = 2020;
+var YEAR_TEXT = String(TARGET_YEAR);
+
 var AOI_ASSET = 'projects/ee-yangsimple237/assets/GYBJ';
-var LANDUSE_ASSET = 'projects/ee-yangsimple237/assets/2020tudi';
+var LANDUSE_ASSETS_BY_YEAR = {
+  '2020': 'projects/ee-yangsimple237/assets/2020tudi',
+  '2021': '',
+  '2022': '',
+  '2023': '',
+  '2024': '',
+  '2025': ''
+};
+var LANDUSE_ASSET = LANDUSE_ASSETS_BY_YEAR[YEAR_TEXT];
 var LANDUSE_BAND = 'b1';
 
-var START_DATE = '2020-01-01';
-var END_DATE = '2021-01-01';
+if (!LANDUSE_ASSET) {
+  throw new Error('请先在 LANDUSE_ASSETS_BY_YEAR 中配置 TARGET_YEAR 对应的土地利用资产。');
+}
+
+var START_DATE = YEAR_TEXT + '-01-01';
+var END_DATE = String(TARGET_YEAR + 1) + '-01-01';
 var SCALE = 10;
 var GRID_SIZE = 1000;
 var EXPORT_CRS = 'EPSG:32650';
@@ -57,6 +72,8 @@ var SVM_COST = 10;
 var SVM_GAMMA = 0.01;
 
 var DRIVE_FOLDER = 'GEE_Gaoyou_Model_Comparison';
+var EXPORT_ACCURACY_TABLES = true;
+var EXPORT_SPATIAL_PREDICTION = false;
 
 // ============================================================================
 // 容量安全运行参数
@@ -97,7 +114,7 @@ Map.addLayer(
 Map.addLayer(
   modelLabel,
   {min: 0, max: 4, palette: CLASS_PALETTE},
-  '2020土地利用标签',
+  YEAR_TEXT + '土地利用标签',
   false
 );
 
@@ -190,16 +207,16 @@ function makeQuarter(start, end, prefix) {
 }
 
 var commonQuarterFeatures = ee.Image.cat([
-  makeQuarter('2020-01-01', '2020-04-01', 'Q1'),
-  makeQuarter('2020-04-01', '2020-07-01', 'Q2'),
-  makeQuarter('2020-07-01', '2020-10-01', 'Q3'),
-  makeQuarter('2020-10-01', '2021-01-01', 'Q4')
+  makeQuarter(YEAR_TEXT + '-01-01', YEAR_TEXT + '-04-01', 'Q1'),
+  makeQuarter(YEAR_TEXT + '-04-01', YEAR_TEXT + '-07-01', 'Q2'),
+  makeQuarter(YEAR_TEXT + '-07-01', YEAR_TEXT + '-10-01', 'Q3'),
+  makeQuarter(YEAR_TEXT + '-10-01', END_DATE, 'Q4')
 ]);
 
 function makeMonthlyIndexFeatures(indexName) {
   var images = [];
   for (var month = 1; month <= 12; month++) {
-    var start = ee.Date.fromYMD(2020, month, 1);
+    var start = ee.Date.fromYMD(TARGET_YEAR, month, 1);
     var end = start.advance(1, 'month');
     var prefix = month < 10 ? 'M0' + month : 'M' + month;
     images.push(
@@ -265,6 +282,8 @@ var activeIndexName = activeExperiment.indexName;
 var activeRunId = activeAlgorithm + '_' + activeIndexName;
 
 print('Sentinel-2影像数量：', s2.size());
+print('当前年份：', TARGET_YEAR);
+print('当前土地利用资产：', LANDUSE_ASSET);
 print('当前实验批次：', EXPERIMENT_BATCH, activeRunId);
 print('当前实验特征数量：', activeFeatureSet.image.bandNames().size());
 
@@ -465,6 +484,7 @@ function evaluateExperiment(
 
   summaryRows.push(ee.Feature(null, {
     record_type: 'experiment_summary',
+    year: TARGET_YEAR,
     batch: EXPERIMENT_BATCH,
     run_id: activeRunId,
     experiment_id: experimentId,
@@ -481,6 +501,7 @@ function evaluateExperiment(
   for (var classIndex = 0; classIndex < MODEL_CLASSES.length; classIndex++) {
     classRows.push(ee.Feature(null, {
       record_type: 'class_metric',
+      year: TARGET_YEAR,
       batch: EXPERIMENT_BATCH,
       run_id: activeRunId,
       experiment_id: experimentId,
@@ -505,6 +526,7 @@ function evaluateExperiment(
     ) {
       matrixRows.push(ee.Feature(null, {
         record_type: 'confusion_matrix',
+        year: TARGET_YEAR,
         batch: EXPERIMENT_BATCH,
         run_id: activeRunId,
         experiment_id: experimentId,
@@ -520,7 +542,7 @@ function evaluateExperiment(
     }
   }
 
-  if (validationName === 'spatial') {
+  if (validationName === 'spatial' && EXPORT_SPATIAL_PREDICTION) {
     var prediction = featureSet.image
       .classify(classifier)
       .rename(algorithmName + '_' + featureSet.name)
@@ -552,6 +574,7 @@ var completeAccuracyTable = summaryTable
   .merge(confusionTable);
 
 var summaryDisplayTable = summaryTable.select([
+  'year',
   'batch',
   'run_id',
   'experiment_id',
@@ -566,6 +589,7 @@ var summaryDisplayTable = summaryTable.select([
 ]);
 
 var classMetricDisplayTable = classMetricTable.select([
+  'year',
   'batch',
   'run_id',
   'experiment_id',
@@ -627,41 +651,45 @@ print(
 // 4. 地图显示与导出
 // ============================================================================
 
-var activePredictionDisplay = ee.Image(activeSpatialClassification);
+if (EXPORT_ACCURACY_TABLES) {
+  Export.table.toDrive({
+    collection: completeAccuracyTable,
+    description: 'Gaoyou_' + activeRunId + '_accuracy_' + YEAR_TEXT,
+    folder: DRIVE_FOLDER,
+    fileNamePrefix: 'gaoyou_' + activeRunId + '_accuracy_' + YEAR_TEXT,
+    fileFormat: 'CSV'
+  });
 
-Map.addLayer(
-  activePredictionDisplay,
-  {min: 0, max: 4, palette: CLASS_PALETTE},
-  '当前空间分类：' + activeRunId,
-  true
-);
+  Export.table.toDrive({
+    collection: summaryTable,
+    description: 'Gaoyou_' + activeRunId + '_summary_' + YEAR_TEXT,
+    folder: DRIVE_FOLDER,
+    fileNamePrefix: 'gaoyou_' + activeRunId + '_summary_' + YEAR_TEXT,
+    fileFormat: 'CSV'
+  });
+}
 
-Export.table.toDrive({
-  collection: completeAccuracyTable,
-  description: 'Gaoyou_' + activeRunId + '_accuracy_2020',
-  folder: DRIVE_FOLDER,
-  fileNamePrefix: 'gaoyou_' + activeRunId + '_accuracy_2020',
-  fileFormat: 'CSV'
-});
+if (EXPORT_SPATIAL_PREDICTION) {
+  var activePredictionDisplay = ee.Image(activeSpatialClassification);
 
-Export.table.toDrive({
-  collection: summaryTable,
-  description: 'Gaoyou_' + activeRunId + '_summary_2020',
-  folder: DRIVE_FOLDER,
-  fileNamePrefix: 'gaoyou_' + activeRunId + '_summary_2020',
-  fileFormat: 'CSV'
-});
+  Map.addLayer(
+    activePredictionDisplay,
+    {min: 0, max: 4, palette: CLASS_PALETTE},
+    YEAR_TEXT + '当前空间分类：' + activeRunId,
+    true
+  );
 
-Export.image.toDrive({
-  image: activePredictionDisplay.clip(region),
-  description: 'Gaoyou_' + activeRunId + '_spatial_prediction_2020',
-  folder: DRIVE_FOLDER,
-  fileNamePrefix: 'gaoyou_' + activeRunId + '_spatial_prediction_2020_10m',
-  region: region,
-  scale: SCALE,
-  crs: EXPORT_CRS,
-  maxPixels: 1e13,
-  fileFormat: 'GeoTIFF',
-  formatOptions: {cloudOptimized: true}
-});
+  Export.image.toDrive({
+    image: activePredictionDisplay.clip(region),
+    description: 'Gaoyou_' + activeRunId + '_spatial_prediction_' + YEAR_TEXT,
+    folder: DRIVE_FOLDER,
+    fileNamePrefix: 'gaoyou_' + activeRunId + '_spatial_prediction_' + YEAR_TEXT + '_10m',
+    region: region,
+    scale: SCALE,
+    crs: EXPORT_CRS,
+    maxPixels: 1e13,
+    fileFormat: 'GeoTIFF',
+    formatOptions: {cloudOptimized: true}
+  });
+}
 

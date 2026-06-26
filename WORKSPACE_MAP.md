@@ -5,7 +5,7 @@
 - `scripts/gaoyou_irrigation_2020.js`：高邮灌区 2020 年灌溉稻田初步识别 GEE JavaScript。
 - `scripts/gaoyou_landcover_rf_2020.js`：高邮地区 2020 年 S1/S2 多时相随机森林土地利用分类、空间验证和耕地面积统计。
 - `scripts/gaoyou_landcover_hierarchical_rf_2020.js`：增强版分层随机森林；先识别永久水体，再分类林地、耕地、建筑和其他，重点降低耕地误判水体。
-- `scripts/gaoyou_model_comparison_2020.js`：RF/CART/SVM、NDVI/SAVI/OSAVI、随机与空间验证的18组论文对比实验；通过`EXPERIMENT_BATCH=1—9`分批运行以避免GEE容量超限。
+- `scripts/gaoyou_model_comparison_2020.js`：RF/CART/SVM、NDVI/SAVI/OSAVI、随机与空间验证的18组论文对比实验；通过`TARGET_YEAR`和年度土地利用资产表切换年份，通过`EXPERIMENT_BATCH=1—9`分批运行以避免GEE容量超限；默认只导出精度CSV，可按需打开空间分类GeoTIFF导出。
 
 当前主脚本已回退到 `v0.2.0` 状态，不包含水体样本点导出和人工修正样本重训练。相关实现仍保留在以下Git分支：
 
