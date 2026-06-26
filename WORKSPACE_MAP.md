@@ -6,6 +6,7 @@
 - `scripts/gaoyou_landcover_rf_2020.js`：高邮地区 2020 年 S1/S2 多时相随机森林土地利用分类、空间验证和耕地面积统计。
 - `scripts/gaoyou_landcover_hierarchical_rf_2020.js`：增强版分层随机森林；先识别永久水体，再分类林地、耕地、建筑和其他，重点降低耕地误判水体。
 - `scripts/gaoyou_model_comparison_2020.js`：RF/CART/SVM、NDVI/SAVI/OSAVI、随机与空间验证的18组论文对比实验；通过`TARGET_YEAR`和年度土地利用资产表切换年份，通过`EXPERIMENT_BATCH=1—9`分批运行以避免GEE容量超限；默认只导出精度CSV，可按需打开空间分类GeoTIFF导出。
+- `scripts/gaoyou_cropland_binary_enhanced_2020_2025.js`：耕地/非耕地增强二分类脚本；融合Sentinel-2 NDVI/EVI/LSWI/MNDWI/NDBI/NDRE、Sentinel-1 VV/VH/VV−VH/VV/VH时序和物候特征，支持RF与GTB，输出OA、Kappa、PA、UA、F1、混淆矩阵和耕地面积表。
 
 当前主脚本已回退到 `v0.2.0` 状态，不包含水体样本点导出和人工修正样本重训练。相关实现仍保留在以下Git分支：
 
