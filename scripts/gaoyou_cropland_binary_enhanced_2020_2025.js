@@ -24,6 +24,12 @@ var TARGET_YEAR = 2020;
 // 模型名称：先只用 'RF' 跑通流程；后续如需对比增强模型，可改为 'GTB'。
 var MODEL_NAME = 'RF';
 
+// 默认制图阈值。P(cropland) >= 该阈值时判为耕地。
+var CLASSIFICATION_THRESHOLD = 0.50;
+
+// 阈值优化列表。一次运行会同时输出这些阈值下的 OA、Kappa、PA、UA、F1。
+var THRESHOLDS = [0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65];
+
 // 是否额外导出当前年份的耕地二值 GeoTIFF。只做精度表时保持 false。
 var EXPORT_CROPLAND_TIF = false;
 
@@ -481,6 +487,48 @@ function metricsFromSamples(samples) {
   });
 }
 
+function addCroplandProbability(feature) {
+  var probabilities = ee.Array(feature.get('probability_array'));
+  return feature.set('cropland_probability', probabilities.get([1]));
+}
+
+function classifyProbabilitySamples(samples, threshold) {
+  return samples.map(function(feature) {
+    var predicted = ee.Number(feature.get('cropland_probability'))
+      .gte(threshold)
+      .toInt();
+    return feature.set({
+      classification: predicted,
+      threshold: threshold
+    });
+  });
+}
+
+function thresholdMetricFeature(samplesWithProbability, threshold, year, modelName, validationType) {
+  var assessed = classifyProbabilitySamples(samplesWithProbability, threshold);
+  var metrics = metricsFromSamples(assessed);
+  var pa = ee.List(metrics.get('pa'));
+  var ua = ee.List(metrics.get('ua'));
+  var f1 = ee.List(metrics.get('f1'));
+
+  return ee.Feature(null, {
+    record_type: 'threshold_metric',
+    year: year,
+    model: modelName,
+    validation: validationType,
+    threshold: threshold,
+    overall_accuracy: metrics.get('overall_accuracy'),
+    kappa: metrics.get('kappa'),
+    macro_f1: metrics.get('macro_f1'),
+    non_cropland_PA: pa.get(0),
+    non_cropland_UA: ua.get(0),
+    non_cropland_F1: f1.get(0),
+    cropland_PA: pa.get(1),
+    cropland_UA: ua.get(1),
+    cropland_F1: f1.get(1)
+  });
+}
+
 function areaByClass(classification, year, modelName, validationType) {
   var croplandArea = ee.Image.pixelArea()
     .updateMask(classification.eq(1))
@@ -516,6 +564,7 @@ function areaByClass(classification, year, modelName, validationType) {
     year: year,
     model: modelName,
     validation: validationType,
+    threshold: CLASSIFICATION_THRESHOLD,
     cropland_area_m2: croplandArea,
     cropland_area_ha: croplandArea.divide(10000),
     cropland_area_km2: croplandArea.divide(1000000),
@@ -558,6 +607,8 @@ function referenceArea(label, year) {
     record_type: 'reference_area',
     year: year,
     model: 'landuse_asset',
+    validation: 'reference',
+    threshold: -1,
     cropland_area_m2: croplandArea,
     cropland_area_ha: croplandArea.divide(10000),
     cropland_area_km2: croplandArea.divide(1000000),
@@ -592,13 +643,21 @@ function evaluateYear(year, modelName, validationType) {
     geometries: false
   });
 
-  var classifier = buildClassifier(modelName).train({
+  var classifier = buildClassifier(modelName)
+    .setOutputMode('MULTIPROBABILITY')
+    .train({
     features: trainSamples,
     classProperty: 'label',
     inputProperties: featureNames
   });
 
-  var assessed = testSamples.classify(classifier);
+  var samplesWithProbability = testSamples
+    .classify(classifier, 'probability_array')
+    .map(addCroplandProbability);
+  var assessed = classifyProbabilitySamples(
+    samplesWithProbability,
+    CLASSIFICATION_THRESHOLD
+  );
   var metrics = metricsFromSamples(assessed);
   var pa = ee.List(metrics.get('pa'));
   var ua = ee.List(metrics.get('ua'));
@@ -649,15 +708,34 @@ function evaluateYear(year, modelName, validationType) {
     }
   }
 
+  var thresholdRows = THRESHOLDS.map(function(threshold) {
+    return thresholdMetricFeature(
+      samplesWithProbability,
+      threshold,
+      year,
+      modelName,
+      validationType
+    );
+  });
+
   var metricTable = ee.FeatureCollection([summary])
     .merge(ee.FeatureCollection(classRows))
-    .merge(ee.FeatureCollection(matrixRows));
+    .merge(ee.FeatureCollection(matrixRows))
+    .merge(ee.FeatureCollection(thresholdRows));
   var classification = ee.Image(0).rename('cropland').toInt16();
+  var probability = ee.Image(0).rename('cropland_probability').toFloat();
   var areaCollection = ee.FeatureCollection([]);
   var outputTable = metricTable;
 
   if (validationType === 'spatial') {
-    classification = features.classify(classifier).rename('cropland').toInt16();
+    probability = features.classify(classifier)
+      .arrayGet([1])
+      .rename('cropland_probability')
+      .toFloat();
+    classification = probability
+      .gte(CLASSIFICATION_THRESHOLD)
+      .rename('cropland')
+      .toInt16();
     areaCollection = ee.FeatureCollection([
       areaByClass(classification, year, modelName, validationType)
     ]);
@@ -669,8 +747,10 @@ function evaluateYear(year, modelName, validationType) {
     summary: ee.FeatureCollection([summary]),
     classMetric: ee.FeatureCollection(classRows),
     confusion: ee.FeatureCollection(matrixRows),
+    thresholdMetric: ee.FeatureCollection(thresholdRows),
     area: areaCollection,
     classification: classification,
+    probability: probability,
     label: label,
     trainPoints: trainPoints,
     testPoints: testPoints
@@ -686,7 +766,10 @@ var spatialResult = evaluateYear(TARGET_YEAR, MODEL_NAME, 'spatial');
 var resultTable = randomResult.table.merge(spatialResult.table);
 var summaryTable = randomResult.summary.merge(spatialResult.summary);
 var classMetricTable = randomResult.classMetric.merge(spatialResult.classMetric);
+var thresholdMetricTable = randomResult.thresholdMetric
+  .merge(spatialResult.thresholdMetric);
 var prediction = spatialResult.classification;
+var probability = spatialResult.probability;
 var label = spatialResult.label;
 var areaTable = spatialResult.area.merge(ee.FeatureCollection([
   referenceArea(label, TARGET_YEAR)
@@ -699,7 +782,17 @@ print('总体精度表：', summaryTable);
 print('各类别 PA / UA / F1 表：', classMetricTable);
 print('空间验证预测耕地面积：', areaTable);
 
+print('threshold metrics:', thresholdMetricTable);
+print(
+  'best spatial threshold by cropland F1:',
+  thresholdMetricTable
+    .filter(ee.Filter.eq('validation', 'spatial'))
+    .sort('cropland_F1', false)
+    .first()
+);
+
 Map.addLayer(label, {min: 0, max: 1, palette: CLASS_PALETTE}, 'label cropland ' + targetYearText, false);
+Map.addLayer(probability, {min: 0, max: 1, palette: ['FFFFFF', 'E49635']}, 'cropland probability ' + targetYearText, false);
 Map.addLayer(prediction, {min: 0, max: 1, palette: CLASS_PALETTE}, 'prediction cropland ' + targetYearText, true);
 Map.addLayer(randomResult.trainPoints, {color: '00FF00'}, 'random train points', false);
 Map.addLayer(randomResult.testPoints, {color: 'FF0000'}, 'random test points', false);
@@ -725,11 +818,18 @@ Export.table.toDrive({
     'overall_accuracy',
     'kappa',
     'macro_f1',
+    'threshold',
     'class_code',
     'class_name',
     'PA',
     'UA',
     'F1',
+    'non_cropland_PA',
+    'non_cropland_UA',
+    'non_cropland_F1',
+    'cropland_PA',
+    'cropland_UA',
+    'cropland_F1',
     'actual_code',
     'actual_name',
     'predicted_code',
@@ -754,6 +854,7 @@ Export.table.toDrive({
     'year',
     'model',
     'validation',
+    'threshold',
     'cropland_area_m2',
     'cropland_area_ha',
     'cropland_area_km2',
@@ -801,6 +902,7 @@ if (EXPORT_MULTI_YEAR_AREA_TABLE) {
       'year',
       'model',
       'validation',
+      'threshold',
       'cropland_area_m2',
       'cropland_area_ha',
       'cropland_area_km2',
